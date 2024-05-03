@@ -19,6 +19,8 @@ import "context"
 type OktetodoDagger struct{}
 
 // Returns a container that has Okteto CLI with the correct context set
+// example usage:
+// dagger call set-context --context=arsh.okteto.me --token=$OKTETO_TOKEN
 func (m *OktetodoDagger) SetContext(context string, token string) *Container {
 	return dag.Container().
 		From("okteto/okteto").
@@ -27,7 +29,10 @@ func (m *OktetodoDagger) SetContext(context string, token string) *Container {
 		WithExec([]string{"okteto", "ctx", "use", context})
 }
 
-func (m *OktetodoDagger) PreviewEnv(ctx context.Context,
+// Deploys a preview environment in the specified okteto context
+// example usage:
+// dagger call preview-deploy --repo=https://github.com/okteto/todolist-pulumi-s3 --branch=name-change --pr=https://github.com/okteto/todolist-pulumi-s3/pull/2 --context=arsh.okteto.me --token=$OKTETO_TOKEN
+func (m *OktetodoDagger) PreviewDeploy(ctx context.Context,
 	// Repo to deploy
 	repo string,
 	// Branch to deploy
@@ -49,4 +54,24 @@ func (m *OktetodoDagger) PreviewEnv(ctx context.Context,
 		return "", err
 	}
 	return endpointsOut, nil
+}
+
+// Destorys a preview environment at the specified okteto context
+// example usage:
+// dagger call preview-destroy --branch=name-change --context=arsh.okteto.me --token=$OKTETO_TOKEN
+func (m *OktetodoDagger) PreviewDestroy(ctx context.Context,
+	// Branch to deploy (to be used as the name for the preview env)
+	branch string,
+	// Okteto context to be used for deployment
+	context string,
+	// Token to be used to authenticate with the Okteto context
+	token string) (string, error) {
+	c := m.SetContext(context, token).WithExec([]string{
+		"okteto", "preview", "destroy", branch,
+	})
+	destoryOut, err := c.Stdout(ctx)
+	if err != nil {
+		return "", err
+	}
+	return destoryOut, nil
 }
