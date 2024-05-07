@@ -4,13 +4,35 @@ package main
 
 import (
 	"context"
-	"dagger/oktetodo-dagger/internal/dagger"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
+
+	"dagger/oktetodo-dagger/internal/dagger"
+	"dagger/oktetodo-dagger/internal/telemetry"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var dag = dagger.Connect()
+
+func Tracer() trace.Tracer {
+	return otel.Tracer("dagger.io/sdk.go")
+}
+
+// used for local MarshalJSON implementations
+var marshalCtx = context.Background()
+
+// called by main()
+func setMarshalContext(ctx context.Context) {
+	marshalCtx = ctx
+	dagger.SetMarshalContext(ctx)
+}
 
 type DaggerObject = dagger.DaggerObject
 
@@ -87,6 +109,9 @@ type ModuleID = dagger.ModuleID
 
 // The `ModuleSourceID` scalar type represents an identifier for an object of type ModuleSource.
 type ModuleSourceID = dagger.ModuleSourceID
+
+// The `ModuleSourceViewID` scalar type represents an identifier for an object of type ModuleSourceView.
+type ModuleSourceViewID = dagger.ModuleSourceViewID
 
 // The `ObjectTypeDefID` scalar type represents an identifier for an object of type ObjectTypeDef.
 type ObjectTypeDefID = dagger.ObjectTypeDefID
@@ -225,6 +250,9 @@ type DirectoryDockerBuildOpts = dagger.DirectoryDockerBuildOpts
 // DirectoryEntriesOpts contains options for Directory.Entries
 type DirectoryEntriesOpts = dagger.DirectoryEntriesOpts
 
+// DirectoryExportOpts contains options for Directory.Export
+type DirectoryExportOpts = dagger.DirectoryExportOpts
+
 // DirectoryPipelineOpts contains options for Directory.Pipeline
 type DirectoryPipelineOpts = dagger.DirectoryPipelineOpts
 
@@ -297,6 +325,8 @@ type GitRefTreeOpts = dagger.GitRefTreeOpts
 // A git repository.
 type GitRepository = dagger.GitRepository
 
+type WithGitRepositoryFunc = dagger.WithGitRepositoryFunc
+
 // A graphql input type, which is essentially just a group of named args.
 // This is currently only used to represent pre-existing usage of graphql input types
 // in the core API. It is not used by user modules and shouldn't ever be as user
@@ -327,6 +357,12 @@ type ModuleDependency = dagger.ModuleDependency
 type ModuleSource = dagger.ModuleSource
 
 type WithModuleSourceFunc = dagger.WithModuleSourceFunc
+
+// ModuleSourceResolveDirectoryFromCallerOpts contains options for ModuleSource.ResolveDirectoryFromCaller
+type ModuleSourceResolveDirectoryFromCallerOpts = dagger.ModuleSourceResolveDirectoryFromCallerOpts
+
+// A named set of path filters that can be applied to directory arguments provided to functions.
+type ModuleSourceView = dagger.ModuleSourceView
 
 // A definition of a custom object defined in a Module.
 type ObjectTypeDef = dagger.ObjectTypeDef
@@ -521,58 +557,86 @@ func (r *OktetodoDagger) UnmarshalJSON(bs []byte) error {
 func main() {
 	ctx := context.Background()
 
+	// Direct slog to the new stderr. This is only for dev time debugging, and
+	// runtime errors/warnings.
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelWarn,
+	})))
+
+	if err := dispatch(ctx); err != nil {
+		fmt.Println(err.Error())
+		os.Exit(2)
+	}
+}
+
+func dispatch(ctx context.Context) error {
+	ctx = telemetry.InitEmbedded(ctx, resource.NewWithAttributes(
+		semconv.SchemaURL,
+		semconv.ServiceNameKey.String("dagger-go-sdk"),
+		// TODO version?
+	))
+	defer telemetry.Close()
+
+	ctx, span := Tracer().Start(ctx, "Go runtime",
+		trace.WithAttributes(
+			// In effect, the following two attributes hide the exec /runtime span.
+			//
+			// Replace the parent span,
+			attribute.Bool("dagger.io/ui.mask", true),
+			// and only show our children.
+			attribute.Bool("dagger.io/ui.passthrough", true),
+		))
+	defer span.End()
+
+	// A lot of the "work" actually happens when we're marshalling the return
+	// value, which entails getting object IDs, which happens in MarshalJSON,
+	// which has no ctx argument, so we use this lovely global variable.
+	setMarshalContext(ctx)
+
 	fnCall := dag.CurrentFunctionCall()
 	parentName, err := fnCall.ParentName(ctx)
 	if err != nil {
-		fmt.Println(err.Error())
-		os.Exit(2)
+		return fmt.Errorf("get parent name: %w", err)
 	}
 	fnName, err := fnCall.Name(ctx)
 	if err != nil {
-		fmt.Println(err.Error())
-		os.Exit(2)
+		return fmt.Errorf("get fn name: %w", err)
 	}
 	parentJson, err := fnCall.Parent(ctx)
 	if err != nil {
-		fmt.Println(err.Error())
-		os.Exit(2)
+		return fmt.Errorf("get fn parent: %w", err)
 	}
 	fnArgs, err := fnCall.InputArgs(ctx)
 	if err != nil {
-		fmt.Println(err.Error())
-		os.Exit(2)
+		return fmt.Errorf("get fn args: %w", err)
 	}
 
 	inputArgs := map[string][]byte{}
 	for _, fnArg := range fnArgs {
 		argName, err := fnArg.Name(ctx)
 		if err != nil {
-			fmt.Println(err.Error())
-			os.Exit(2)
+			return fmt.Errorf("get fn arg name: %w", err)
 		}
 		argValue, err := fnArg.Value(ctx)
 		if err != nil {
-			fmt.Println(err.Error())
-			os.Exit(2)
+			return fmt.Errorf("get fn arg value: %w", err)
 		}
 		inputArgs[argName] = []byte(argValue)
 	}
 
 	result, err := invoke(ctx, []byte(parentJson), parentName, fnName, inputArgs)
 	if err != nil {
-		fmt.Println(err.Error())
-		os.Exit(2)
+		return fmt.Errorf("invoke: %w", err)
 	}
 	resultBytes, err := json.Marshal(result)
 	if err != nil {
-		fmt.Println(err.Error())
-		os.Exit(2)
+		return fmt.Errorf("marshal: %w", err)
 	}
 	_, err = fnCall.ReturnValue(ctx, JSON(resultBytes))
 	if err != nil {
-		fmt.Println(err.Error())
-		os.Exit(2)
+		return fmt.Errorf("store return value: %w", err)
 	}
+	return nil
 }
 
 func invoke(ctx context.Context, parentJSON []byte, parentName string, fnName string, inputArgs map[string][]byte) (_ any, err error) {
@@ -600,6 +664,76 @@ func invoke(ctx context.Context, parentJSON []byte, parentName string, fnName st
 				}
 			}
 			return (*OktetodoDagger).SetContext(&parent, context, token), nil
+		case "PreviewDeploy":
+			var parent OktetodoDagger
+			err = json.Unmarshal(parentJSON, &parent)
+			if err != nil {
+				panic(fmt.Errorf("%s: %w", "failed to unmarshal parent object", err))
+			}
+			var repo string
+			if inputArgs["repo"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["repo"]), &repo)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg repo", err))
+				}
+			}
+			var branch string
+			if inputArgs["branch"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["branch"]), &branch)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg branch", err))
+				}
+			}
+			var pr string
+			if inputArgs["pr"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["pr"]), &pr)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg pr", err))
+				}
+			}
+			var context string
+			if inputArgs["context"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["context"]), &context)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg context", err))
+				}
+			}
+			var token string
+			if inputArgs["token"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["token"]), &token)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg token", err))
+				}
+			}
+			return (*OktetodoDagger).PreviewDeploy(&parent, ctx, repo, branch, pr, context, token)
+		case "PreviewDestroy":
+			var parent OktetodoDagger
+			err = json.Unmarshal(parentJSON, &parent)
+			if err != nil {
+				panic(fmt.Errorf("%s: %w", "failed to unmarshal parent object", err))
+			}
+			var branch string
+			if inputArgs["branch"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["branch"]), &branch)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg branch", err))
+				}
+			}
+			var context string
+			if inputArgs["context"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["context"]), &context)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg context", err))
+				}
+			}
+			var token string
+			if inputArgs["token"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["token"]), &token)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg token", err))
+				}
+			}
+			return (*OktetodoDagger).PreviewDestroy(&parent, ctx, branch, context, token)
 		default:
 			return nil, fmt.Errorf("unknown function %s", fnName)
 		}
@@ -611,9 +745,25 @@ func invoke(ctx context.Context, parentJSON []byte, parentName string, fnName st
 					WithFunction(
 						dag.Function("SetContext",
 							dag.TypeDef().WithObject("Container")).
-							WithDescription("Returns a container that has Okteto CLI with the correct context set").
+							WithDescription("Returns a container that has Okteto CLI with the correct context set\nexample usage:\ndagger call set-context --context=arsh.okteto.me --token=$OKTETO_TOKEN").
 							WithArg("context", dag.TypeDef().WithKind(StringKind)).
-							WithArg("token", dag.TypeDef().WithKind(StringKind)))), nil
+							WithArg("token", dag.TypeDef().WithKind(StringKind))).
+					WithFunction(
+						dag.Function("PreviewDeploy",
+							dag.TypeDef().WithKind(StringKind)).
+							WithDescription("Deploys a preview environment in the specified okteto context\nexample usage:\ndagger call preview-deploy --repo=https://github.com/RinkiyaKeDad/okteto-dagger-sample --branch=name-change --pr=https://github.com/RinkiyaKeDad/okteto-dagger-sample/pull/1 --context=arsh.okteto.me --token=$OKTETO_TOKEN").
+							WithArg("repo", dag.TypeDef().WithKind(StringKind), FunctionWithArgOpts{Description: "Repo to deploy"}).
+							WithArg("branch", dag.TypeDef().WithKind(StringKind), FunctionWithArgOpts{Description: "Branch to deploy"}).
+							WithArg("pr", dag.TypeDef().WithKind(StringKind), FunctionWithArgOpts{Description: "URL of the pull request to attach in the Okteto Dashboard"}).
+							WithArg("context", dag.TypeDef().WithKind(StringKind), FunctionWithArgOpts{Description: "Okteto context to be used for deployment"}).
+							WithArg("token", dag.TypeDef().WithKind(StringKind), FunctionWithArgOpts{Description: "Token to be used to authenticate with the Okteto context"})).
+					WithFunction(
+						dag.Function("PreviewDestroy",
+							dag.TypeDef().WithKind(StringKind)).
+							WithDescription("Destorys a preview environment at the specified okteto context\nexample usage:\ndagger call preview-destroy --branch=name-change --context=arsh.okteto.me --token=$OKTETO_TOKEN").
+							WithArg("branch", dag.TypeDef().WithKind(StringKind), FunctionWithArgOpts{Description: "Branch to deploy (to be used as the name for the preview env)"}).
+							WithArg("context", dag.TypeDef().WithKind(StringKind), FunctionWithArgOpts{Description: "Okteto context to be used for deployment"}).
+							WithArg("token", dag.TypeDef().WithKind(StringKind), FunctionWithArgOpts{Description: "Token to be used to authenticate with the Okteto context"}))), nil
 	default:
 		return nil, fmt.Errorf("unknown object %s", parentName)
 	}

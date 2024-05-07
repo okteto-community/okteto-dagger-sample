@@ -1,13 +1,24 @@
-name: GitHub Issues Commenter
+name: dagger
 on:
-  issues:
-    types:
-      - opened
+  pull_request:
+    branches:
+      - main
+
+env:
+  PR_NUMBER: ${{ github.event.number }}
+
 jobs:
-  comment:
+  build:
+    name: build
     runs-on: ubuntu-latest
     steps:
-      - run: gh issue comment $ISSUE --body "Thank you for opening this issue!"
-        env:
-          GH_TOKEN: ${{ secrets.TOKEN }}
-          ISSUE: ${{ github.event.issue.html_url }}
+      - name: Checkout
+        uses: actions/checkout@v4
+      -
+        name: Call Dagger Function
+        uses: dagger/dagger-for-github@v5
+        with:
+          version: "latest"
+          verb: call
+          module: github.com/okteto/dagger-module@v0.0.1
+          args: preview-deploy --repo=https://github.com/${GITHUB_REPOSITORY} --branch=$GITHUB_HEAD_REF --pr=github.com/${GITHUB_REPOSITORY}/pull/${PR_NUMBER} --context=https://arsh.okteto.me --token=${{ secrets.TOKEN }}

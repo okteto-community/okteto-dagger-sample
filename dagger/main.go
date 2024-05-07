@@ -14,9 +14,20 @@
 
 package main
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+	"log"
+	"strings"
+)
 
 type OktetodoDagger struct{}
+
+// Define a struct to match the JSON structure
+type Endpoint struct {
+	URL     string `json:"url"`
+	Private bool   `json:"private"`
+}
 
 // Returns a container that has Okteto CLI with the correct context set
 // example usage:
@@ -31,7 +42,7 @@ func (m *OktetodoDagger) SetContext(context string, token string) *Container {
 
 // Deploys a preview environment in the specified okteto context
 // example usage:
-// dagger call preview-deploy --repo=https://github.com/okteto/todolist-pulumi-s3 --branch=name-change --pr=https://github.com/okteto/todolist-pulumi-s3/pull/2 --context=arsh.okteto.me --token=$OKTETO_TOKEN
+// dagger call preview-deploy --repo=https://github.com/RinkiyaKeDad/okteto-dagger-sample --branch=name-change --pr=https://github.com/RinkiyaKeDad/okteto-dagger-sample/pull/1 --context=arsh.okteto.me --token=$OKTETO_TOKEN
 func (m *OktetodoDagger) PreviewDeploy(ctx context.Context,
 	// Repo to deploy
 	repo string,
@@ -53,7 +64,28 @@ func (m *OktetodoDagger) PreviewDeploy(ctx context.Context,
 	if err != nil {
 		return "", err
 	}
-	return endpointsOut, nil
+
+	// Variable to hold the parsed data
+	var endpoints []Endpoint
+
+	// Parse the JSON data into the slice of Endpoint structs
+	err = json.Unmarshal([]byte(endpointsOut), &endpoints)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// StringBuilder to hold all URLs
+	var urlsBuilder strings.Builder
+
+	// Iterate through the parsed data and append each URL to the StringBuilder
+	for _, endpoint := range endpoints {
+		urlsBuilder.WriteString(endpoint.URL + "\n")
+	}
+
+	// Get the string with all URLs
+	allURLs := urlsBuilder.String()
+
+	return allURLs, nil
 }
 
 // Destorys a preview environment at the specified okteto context
