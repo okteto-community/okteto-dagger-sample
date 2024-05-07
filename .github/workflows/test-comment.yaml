@@ -1,0 +1,13 @@
+name: GitHub Issues Commenter
+on:
+  issues:
+    types:
+      - opened
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh issue comment $ISSUE --body "Thank you for opening this issue!"
+        env:
+          GH_TOKEN: ${{ secrets.TOKEN }}
+          ISSUE: ${{ github.event.issue.html_url }}
