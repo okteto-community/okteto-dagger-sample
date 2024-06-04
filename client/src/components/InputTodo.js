@@ -22,7 +22,7 @@ const InputTodo = () => {
     return (
         <Fragment>
             <h1 className="title">
-                Okte<span>todo</span>
+                This is anothe attempt
             </h1>
             <form className="app-add" onSubmit={onSubmitForm}>
                 <input
