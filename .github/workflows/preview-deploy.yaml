@@ -21,3 +21,38 @@ jobs:
           verb: call
           module: github.com/okteto/dagger-module
           args: preview-deploy --repo=https://github.com/${GITHUB_REPOSITORY} --branch=$GITHUB_HEAD_REF --pr=github.com/${GITHUB_REPOSITORY}/pull/${PR_NUMBER} --context=https://arsh.okteto.me --token=${{ secrets.OKTETO_TOKEN }}
+  
+  comment:
+    name: Comments on PR
+    runs-on: ubuntu-latest
+
+    steps:
+    # Checkout the repository
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # Example step that produces some output
+    - name: Run a script and capture output
+      id: example_step
+      run: echo "This is the output of the previous step" > output.txt
+
+    # Read the output of the previous step
+    - name: Read output
+      id: read_output
+      run: |
+        output=$(cat output.txt)
+        echo "::set-output name=step_output::$output"
+
+    # Comment on the pull request with the output of the previous step
+    - name: Comment on PR
+      uses: actions/github-script@v6
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const output = `Step Output: ${{ steps.read_output.outputs.step_output }}`;
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: output
+          });
