@@ -19,5 +19,5 @@ jobs:
         with:
           version: "latest"
           verb: call
-          module: github.com/okteto/dagger-module@v0.0.2
+          module: github.com/okteto/dagger-module@latest
           args: preview-deploy --repo=https://github.com/${GITHUB_REPOSITORY} --branch=$GITHUB_HEAD_REF --pr=github.com/${GITHUB_REPOSITORY}/pull/${PR_NUMBER} --context=https://arsh.okteto.me --token=${{ secrets.OKTETO_TOKEN }}
