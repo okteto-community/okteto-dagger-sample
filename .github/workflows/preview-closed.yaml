@@ -11,6 +11,7 @@ jobs:
       uses: dagger/dagger-for-github@v5
       with:
         version: "latest"
+        cloud-token: ${{ secrets.DAGGER_CLOUD_TOKEN }}
         verb: call
         module: github.com/okteto/dagger-module
         args: preview-destroy --branch=$GITHUB_HEAD_REF --context=https://arsh.okteto.me --token=${{ secrets.OKTETO_TOKEN }}
